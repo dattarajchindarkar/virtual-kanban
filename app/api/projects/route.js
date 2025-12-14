@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { connectDB } from "@/lib/mongoose"; // adjust path as needed
-import Project from "@/models/project.model"; // adjust path as needed
+import { connectDB } from "@/app/lib/mongoose";
+import Project from "@/app/models/project.model";
 
 export async function POST(req) {
   try {

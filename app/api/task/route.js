@@ -1,30 +1,23 @@
 // app/api/tasks/route.js
+
 import { NextResponse } from "next/server";
-import { connectDB } from "../../../lib/mongoose.js";
-import Task from "../../../models/Task.js";
+import { connectDB } from "@/app/lib/mongoose";
+import Task from "@/app/models/task.model";
 
 /**
- * Endpoints:
- * GET  /api/tasks?projectId=<id>        -> list tasks for project (sorted by position)
- * POST /api/tasks                       -> create task (body: { title, projectId, status?, description?, position? })
- * PUT  /api/tasks                       -> update task or reorder (see payload below)
- * DELETE /api/tasks                     -> delete task (body: { taskId })
- *
- * Reorder payload (from frontend onDragEnd):
- * { reorder: true, taskId, source: { droppableId, index }, destination: { droppableId, index } }
- *
- * Generic update payload:
- * { taskId, fields }  // fields is an object with fields to update
+ * GET /api/tasks?projectId=xxx
+ * Fetch all tasks for a project
  */
-
 export async function GET(req) {
   try {
     await connectDB();
+
     const { searchParams } = new URL(req.url);
     const projectId = searchParams.get("projectId");
+
     if (!projectId) {
       return NextResponse.json(
-        { error: "projectId required" },
+        { error: "projectId is required" },
         { status: 400 }
       );
     }
@@ -32,60 +25,70 @@ export async function GET(req) {
     const tasks = await Task.find({ project: projectId })
       .sort({ position: 1 })
       .lean();
+
     return NextResponse.json(tasks);
-  } catch (err) {
-    console.error("GET /api/tasks error:", err);
+  } catch (error) {
+    console.error("GET /tasks error:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "Failed to fetch tasks" },
       { status: 500 }
     );
   }
 }
 
+/**
+ * POST /api/tasks
+ * Create a new task
+ */
 export async function POST(req) {
   try {
     await connectDB();
     const body = await req.json();
 
-    if (!body?.title || !body?.projectId) {
+    const { title, projectId, status = "todo" } = body;
+
+    if (!title || !projectId) {
       return NextResponse.json(
-        { error: "title and projectId required" },
+        { error: "title and projectId are required" },
         { status: 400 }
       );
     }
 
     const count = await Task.countDocuments({
-      project: body.projectId,
-      status: body.status || "todo",
+      project: projectId,
+      status,
     });
 
     const task = await Task.create({
-      title: String(body.title).trim(),
-      description: body.description || "",
-      project: body.projectId,
-      status: body.status || "todo",
-      position: typeof body.position === "number" ? body.position : count,
-      assignee: body.assignee || undefined,
+      title,
+      project: projectId,
+      status,
+      position: count,
     });
 
     return NextResponse.json(task, { status: 201 });
-  } catch (err) {
-    console.error("POST /api/tasks error:", err);
+  } catch (error) {
+    console.error("POST /tasks error:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "Failed to create task" },
       { status: 500 }
     );
   }
 }
 
+/**
+ * PUT /api/tasks
+ * Reorder or update a task
+ */
 export async function PUT(req) {
   try {
     await connectDB();
     const body = await req.json();
 
-    // Reorder operation
+    // ---------- REORDER LOGIC ----------
     if (body?.reorder) {
       const { taskId, source, destination } = body;
+
       if (!taskId || !source || !destination) {
         return NextResponse.json(
           { error: "invalid reorder payload" },
@@ -94,34 +97,42 @@ export async function PUT(req) {
       }
 
       const task = await Task.findById(taskId);
-      if (!task)
+      if (!task) {
         return NextResponse.json({ error: "task not found" }, { status: 404 });
+      }
 
       const srcCol = source.droppableId;
       const dstCol = destination.droppableId;
       const srcIndex = source.index;
       const dstIndex = destination.index;
 
+      // ---------- SAME COLUMN ----------
       if (srcCol === dstCol) {
         const items = await Task.find({
           project: task.project,
           status: srcCol,
         }).sort({ position: 1 });
+
         const [moved] = items.splice(srcIndex, 1);
         items.splice(dstIndex, 0, moved);
+
         for (let i = 0; i < items.length; i++) {
           if (items[i].position !== i) {
             items[i].position = i;
             await items[i].save();
           }
         }
-      } else {
-        // remove from source and reindex
+      }
+      // ---------- DIFFERENT COLUMN ----------
+      else {
+        // Remove from source column
         const srcItems = await Task.find({
           project: task.project,
           status: srcCol,
         }).sort({ position: 1 });
+
         srcItems.splice(srcIndex, 1);
+
         for (let i = 0; i < srcItems.length; i++) {
           if (srcItems[i].position !== i) {
             srcItems[i].position = i;
@@ -129,20 +140,21 @@ export async function PUT(req) {
           }
         }
 
-        // set moved task status/position and save
+        // Move task to destination column
         task.status = dstCol;
         task.position = dstIndex;
         await task.save();
 
-        // normalize destination positions
-        const finalDst = await Task.find({
+        // Normalize destination column
+        const dstItems = await Task.find({
           project: task.project,
           status: dstCol,
         }).sort({ position: 1 });
-        for (let i = 0; i < finalDst.length; i++) {
-          if (finalDst[i].position !== i) {
-            finalDst[i].position = i;
-            await finalDst[i].save();
+
+        for (let i = 0; i < dstItems.length; i++) {
+          if (dstItems[i].position !== i) {
+            dstItems[i].position = i;
+            await dstItems[i].save();
           }
         }
       }
@@ -150,43 +162,50 @@ export async function PUT(req) {
       return NextResponse.json({ ok: true });
     }
 
-    // Generic update
-    const { taskId, fields } = body;
-    if (!taskId || !fields) {
+    // ---------- NORMAL UPDATE ----------
+    if (!body?.taskId) {
       return NextResponse.json(
-        { error: "invalid update payload" },
+        { error: "taskId is required" },
         { status: 400 }
       );
     }
 
-    const updated = await Task.findByIdAndUpdate(taskId, fields, { new: true });
-    if (!updated)
-      return NextResponse.json({ error: "task not found" }, { status: 404 });
+    const updated = await Task.findByIdAndUpdate(body.taskId, body, {
+      new: true,
+    });
 
     return NextResponse.json(updated);
-  } catch (err) {
-    console.error("PUT /api/tasks error:", err);
+  } catch (error) {
+    console.error("PUT /tasks error:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "Failed to update task" },
       { status: 500 }
     );
   }
 }
 
+/**
+ * DELETE /api/tasks
+ * Delete a task
+ */
 export async function DELETE(req) {
   try {
     await connectDB();
-    const body = await req.json();
-    const { taskId } = body;
-    if (!taskId)
-      return NextResponse.json({ error: "taskId required" }, { status: 400 });
+    const { taskId } = await req.json();
+
+    if (!taskId) {
+      return NextResponse.json(
+        { error: "taskId is required" },
+        { status: 400 }
+      );
+    }
 
     await Task.findByIdAndDelete(taskId);
     return NextResponse.json({ ok: true });
-  } catch (err) {
-    console.error("DELETE /api/tasks error:", err);
+  } catch (error) {
+    console.error("DELETE /tasks error:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "Failed to delete task" },
       { status: 500 }
     );
   }
