@@ -2,18 +2,42 @@ import { NextResponse } from "next/server";
 import { connectDB } from "@/app/lib/mongoose";
 import Project from "@/app/models/project.model";
 
+/**
+ * GET /api/projects
+ * Fetch all projects
+ */
+export async function GET() {
+  try {
+    await connectDB();
+
+    const projects = await Project.find().lean();
+    return NextResponse.json(projects);
+  } catch (error) {
+    console.error("Error fetching projects:", error);
+    return NextResponse.json(
+      { error: "Failed to fetch projects" },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * POST /api/projects
+ * Create a new project
+ */
 export async function POST(req) {
   try {
     await connectDB();
 
     const body = await req.json();
 
-    // Basic type-safe extraction + trimming
+    // Safe extraction + trimming
     const name = typeof body?.name === "string" ? body.name.trim() : "";
+
     const description =
       typeof body?.description === "string" ? body.description.trim() : "";
 
-    // Validation rules
+    // Validation
     if (!name) {
       return NextResponse.json({ error: "name is required" }, { status: 400 });
     }
@@ -39,20 +63,14 @@ export async function POST(req) {
       );
     }
 
-    // Optionally: more checks (allowed characters, profanity filter, etc.)
-    // Create project
     const project = await Project.create({
       name,
-      description: description || "",
+      description,
     });
 
     return NextResponse.json(project, { status: 201 });
   } catch (error) {
     console.error("Error creating project:", error);
-
-    // Distinguish DB validation errors if you want more specific messages:
-    // if (error.name === 'ValidationError') { ... }
-
     return NextResponse.json(
       { error: "Failed to create project" },
       { status: 500 }
