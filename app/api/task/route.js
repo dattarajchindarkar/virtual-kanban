@@ -1,14 +1,14 @@
-// app/api/tasks/route.js
-
 import { NextResponse } from "next/server";
 import { connectDB } from "@/app/lib/mongoose";
 import Task from "@/app/models/task.model";
+import Project from "@/app/models/project.model";
+import { withAuth } from "@/app/lib/authMiddleware";
 
 /**
  * GET /api/tasks?projectId=xxx
- * Fetch all tasks for a project
+ * Fetch tasks for a project (JWT protected)
  */
-export async function GET(req) {
+export const GET = withAuth(async function GET(req) {
   try {
     await connectDB();
 
@@ -19,6 +19,19 @@ export async function GET(req) {
       return NextResponse.json(
         { error: "projectId is required" },
         { status: 400 }
+      );
+    }
+
+    // 🔐 ensure project belongs to logged-in user
+    const project = await Project.findOne({
+      _id: projectId,
+      owner: req.userId,
+    });
+
+    if (!project) {
+      return NextResponse.json(
+        { error: "Unauthorized access to project" },
+        { status: 403 }
       );
     }
 
@@ -34,13 +47,13 @@ export async function GET(req) {
       { status: 500 }
     );
   }
-}
+});
 
 /**
  * POST /api/tasks
- * Create a new task
+ * Create task (JWT protected)
  */
-export async function POST(req) {
+export const POST = withAuth(async function POST(req) {
   try {
     await connectDB();
     const body = await req.json();
@@ -51,6 +64,19 @@ export async function POST(req) {
       return NextResponse.json(
         { error: "title and projectId are required" },
         { status: 400 }
+      );
+    }
+
+    // 🔐 check project ownership
+    const project = await Project.findOne({
+      _id: projectId,
+      owner: req.userId,
+    });
+
+    if (!project) {
+      return NextResponse.json(
+        { error: "Unauthorized access to project" },
+        { status: 403 }
       );
     }
 
@@ -74,18 +100,18 @@ export async function POST(req) {
       { status: 500 }
     );
   }
-}
+});
 
 /**
  * PUT /api/tasks
- * Reorder or update a task
+ * Reorder or update task (JWT protected)
  */
-export async function PUT(req) {
+export const PUT = withAuth(async function PUT(req) {
   try {
     await connectDB();
     const body = await req.json();
 
-    // ---------- REORDER LOGIC ----------
+    // ---------- REORDER ----------
     if (body?.reorder) {
       const { taskId, source, destination } = body;
 
@@ -101,12 +127,24 @@ export async function PUT(req) {
         return NextResponse.json({ error: "task not found" }, { status: 404 });
       }
 
+      // 🔐 verify project ownership
+      const project = await Project.findOne({
+        _id: task.project,
+        owner: req.userId,
+      });
+
+      if (!project) {
+        return NextResponse.json(
+          { error: "Unauthorized access to task" },
+          { status: 403 }
+        );
+      }
+
       const srcCol = source.droppableId;
       const dstCol = destination.droppableId;
       const srcIndex = source.index;
       const dstIndex = destination.index;
 
-      // ---------- SAME COLUMN ----------
       if (srcCol === dstCol) {
         const items = await Task.find({
           project: task.project,
@@ -122,10 +160,7 @@ export async function PUT(req) {
             await items[i].save();
           }
         }
-      }
-      // ---------- DIFFERENT COLUMN ----------
-      else {
-        // Remove from source column
+      } else {
         const srcItems = await Task.find({
           project: task.project,
           status: srcCol,
@@ -140,12 +175,10 @@ export async function PUT(req) {
           }
         }
 
-        // Move task to destination column
         task.status = dstCol;
         task.position = dstIndex;
         await task.save();
 
-        // Normalize destination column
         const dstItems = await Task.find({
           project: task.project,
           status: dstCol,
@@ -170,6 +203,23 @@ export async function PUT(req) {
       );
     }
 
+    const task = await Task.findById(body.taskId);
+    if (!task) {
+      return NextResponse.json({ error: "task not found" }, { status: 404 });
+    }
+
+    const project = await Project.findOne({
+      _id: task.project,
+      owner: req.userId,
+    });
+
+    if (!project) {
+      return NextResponse.json(
+        { error: "Unauthorized access to task" },
+        { status: 403 }
+      );
+    }
+
     const updated = await Task.findByIdAndUpdate(body.taskId, body, {
       new: true,
     });
@@ -182,13 +232,13 @@ export async function PUT(req) {
       { status: 500 }
     );
   }
-}
+});
 
 /**
  * DELETE /api/tasks
- * Delete a task
+ * Delete task (JWT protected)
  */
-export async function DELETE(req) {
+export const DELETE = withAuth(async function DELETE(req) {
   try {
     await connectDB();
     const { taskId } = await req.json();
@@ -197,6 +247,23 @@ export async function DELETE(req) {
       return NextResponse.json(
         { error: "taskId is required" },
         { status: 400 }
+      );
+    }
+
+    const task = await Task.findById(taskId);
+    if (!task) {
+      return NextResponse.json({ error: "task not found" }, { status: 404 });
+    }
+
+    const project = await Project.findOne({
+      _id: task.project,
+      owner: req.userId,
+    });
+
+    if (!project) {
+      return NextResponse.json(
+        { error: "Unauthorized access to task" },
+        { status: 403 }
       );
     }
 
@@ -209,4 +276,4 @@ export async function DELETE(req) {
       { status: 500 }
     );
   }
-}
+});

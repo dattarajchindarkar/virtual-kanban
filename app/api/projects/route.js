@@ -1,24 +1,28 @@
 import { NextResponse } from "next/server";
 import mongoose from "mongoose";
 import Project from "@/app/models/project.model";
+import { withAuth } from "@/app/lib/authMiddleware";
 
 /**
  * Utility: connect to MongoDB safely
  */
 async function connectDB() {
   if (mongoose.connection.readyState >= 1) return;
-
   await mongoose.connect(process.env.MONGODB_URI);
 }
 
 /**
- * GET /api/projects
+ * GET /api/projects (JWT protected)
  */
-export async function GET() {
+export const GET = withAuth(async function GET(req) {
   try {
     await connectDB();
 
-    const projects = await Project.find().lean();
+    // userId comes from JWT
+    const userId = req.userId;
+
+    const projects = await Project.find({ owner: userId }).lean();
+
     return NextResponse.json(projects, { status: 200 });
   } catch (error) {
     console.error("GET /api/projects error:", error);
@@ -27,19 +31,19 @@ export async function GET() {
       { status: 500 }
     );
   }
-}
+});
 
 /**
- * POST /api/projects
+ * POST /api/projects (JWT protected)
  */
-export async function POST(req) {
+export const POST = withAuth(async function POST(req) {
   try {
     await connectDB();
 
     const body = await req.json();
+    const userId = req.userId;
 
     const name = typeof body?.name === "string" ? body.name.trim() : "";
-
     const description =
       typeof body?.description === "string" ? body.description.trim() : "";
 
@@ -50,6 +54,7 @@ export async function POST(req) {
     const project = await Project.create({
       name,
       description,
+      owner: userId, // 🔐 important
     });
 
     return NextResponse.json(project, { status: 201 });
@@ -60,4 +65,4 @@ export async function POST(req) {
       { status: 500 }
     );
   }
-}
+});
